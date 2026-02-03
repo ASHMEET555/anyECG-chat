@@ -1,0 +1,44 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv/
+venv/
+
+# =========================
+# ML / Deep Learning
+# =========================
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.onnx
+
+# =========================
+# Outputs & Logs
+# =========================
+output/
+logs/
+*.log
+
+# =========================
+# Datasets
+# =========================
+data/
+datasets/
+ecg_data/
+ecg_data1/
+mimic_meta/
+physionet.org/
+
+
+# =========================
+# OS / Editor
+# =========================
+.DS_Store
+.vscode/
+.idea/
