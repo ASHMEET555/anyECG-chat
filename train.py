@@ -9,7 +9,8 @@ from torch.utils.data import DataLoader
 from datasets import load_dataset
 import transformers
 from anyecg.utils import set_random_seed, setup_logger
-from anyecg.utils import Collate_Fn
+# from anyecg.utils import Collate_Fn
+from anyecg.dataset import ReportGenCollator as Collate_Fn
 from anyecg.ecg_language_modeling import ECG_Language_Model
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -72,7 +73,7 @@ def apply_share_recipe(model,use_lora):
             for param in layers[i].parameters():
                 param.requires_grad = True
 
-        if hasattr(encoder,'norm') and encoder.norm is not None:
+        if hasattr(encoder, 'norm') and encoder.norm is not None:
             for param in encoder.norm.parameters(): 
                 param.requires_grad = True
     else: 
@@ -135,11 +136,17 @@ dataset = load_dataset('json', data_files=args.data_path)['train']
 train_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=Collate_Fn(), num_workers=0)
 
 # Optimizer
-named_params=list(ecg_language_model.named_parameters())
+named_params = list(ecg_language_model.named_parameters())
 no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
 optimizer_grouped_parameters = [
-    {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay},
-    {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+    {
+        'params': [p for n, p in named_params if p.requires_grad and not any(nd in n for nd in no_decay)], 
+        'weight_decay': args.weight_decay
+    },
+    {
+        'params': [p for n, p in named_params if p.requires_grad and any(nd in n for nd in no_decay)], 
+        'weight_decay': 0.0
+    }
 ]
 num_train_steps = len(train_loader) * args.num_epochs // args.accumulation_steps
 num_warmup_steps = int(num_train_steps * args.warmup)
@@ -169,12 +176,14 @@ for epoch in trange(args.num_epochs, desc='Epoch'):
         loss.backward()
         
         if (i + 1) % args.accumulation_steps == 0:
+            torch.nn.utils.clip_grad_norm_(ecg_language_model.parameters(), 1.0)
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad()
             steps += 1
 
-            logger.info(f'Epoch {epoch}, Step {steps}, Loss {loss.item()}')
+            if steps % 10 == 0:
+                logger.info(f'Epoch {epoch}, Step {steps}, Loss {loss.item()}')
             if steps % args.save_steps == 0:
                 save_model(ecg_language_model, steps, args.output_dir, args.unfreeze_ecg_model, args.use_lora)
 save_model(ecg_language_model, steps, args.output_dir, args.unfreeze_ecg_model, args.use_lora)
