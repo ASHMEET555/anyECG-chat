@@ -34,6 +34,19 @@ def get_ecg_from_path(path, sampling_freq):
     if set(leads_order_ref).issubset(set(leads_order)):
         indices= [leads_order.index(item) for item in leads_order_ref]
         ecg = ecg[:, indices]
+        # 3. CRITICAL FIX: Normalize to [-1, 1] range
+        # Without this, gradients explode and loss becomes NaN
+    min_val = np.min(ecg)
+    max_val = np.max(ecg)
+        
+    if max_val - min_val > 1e-6: # Avoid division by zero
+        ecg = 2 * (ecg - min_val) / (max_val - min_val) - 1
+    else:
+        ecg = np.zeros_like(ecg) # Flat line signal
+
+        # 4. Handle NaNs in the data itself
+        # Sometimes raw files have missing values (NaNs). Replace them with 0.
+        ecg = np.nan_to_num(ecg)
 
     return ecg
     # if leads_order != leads_order_ref:
@@ -47,19 +60,48 @@ class ReportGenCollator:
     Handles data collation for the Report Generation task (Stage 1 & 2).
     Converts raw JSON entries into (ECG Tensor, Message List) tuples.
     """
-    def __init__(self,sampling_freq=100,base_ecg_dir=""):
-        self.sampling_freq=sampling_freq
-        self.base_ecg_dir=base_ecg_dir
-    def __call__(self,batch):
-        ecgs=[]
-        messages=[]
+    def __init__(self, sampling_freq=100, base_ecg_dir=""):
+        self.sampling_freq = sampling_freq
+        self.base_ecg_dir = base_ecg_dir
+        
+    def __call__(self, batch):
+        ecgs = []
+        messages = []
 
         for item in batch:
-            # load ecg 
-            # ensure path is absolute or relative to project root
-            ecg_path=item.get('path',item.get('ecg_path'))
-            if self.base_ecg_dir:
-                ecg_path=os.path.join(self.base_ecg_dir,ecg_path)
+            # 1. Load ECG 
+            ecg_path = item.get('path', item.get('ecg_path'))
+            if self.base_ecg_dir and ecg_path:
+                ecg_path = os.path.join(self.base_ecg_dir, ecg_path)
+            
+            if ecg_path:
+                ecg_data = get_ecg_from_path(ecg_path, self.sampling_freq)
+            else:
+                ecg_data = np.zeros((1000, 12)) # Fallback
+
+            # Transpose to match model input (Leads, Length)
+            ecg_data = ecg_data.T
+            ecgs.append(ecg_data)
+
+            # 2. Format text message chat template 
+            report = item.get('report', '')
+
+            # Standard instruction format
+            msg = [
+                {"role": "user", "content": "Please provide the report for the following ECG."},
+                {"role": "assistant", "content": report}
+            ]
+            messages.append(msg)
+            
+        # Convert ECG list to tensor 
+        try:
+            ecgs_tensor = torch.tensor(np.array(ecgs), dtype=torch.float32)
+        except:
+            # Fallback if lengths differ
+            ecgs_tensor = [torch.tensor(e, dtype=torch.float32) for e in ecgs]
+            
+        # CRITICAL FIX: Return the data!
+        return ecgs_tensor, messages
             
 class FinetuningDataset(Dataset):
     def __init__(self, dataset, dataset_subtype, ecg_transform, sampling_freq, split_fold, proportion = 1.0):
